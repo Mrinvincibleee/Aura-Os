@@ -10,6 +10,10 @@ type VideoRow = { id: string; title: string; source_type: string; status: string
 type JobRow = { id: string; video_id: string; status: string; progress: number; error: string | null; created_at: string };
 type ClipRow = { id: string; title: string; start_seconds: number; end_seconds: number; virality_score: number | null; transcript: string | null; output_path: string };
 
+function formatCreatedAt(value: string) {
+  return new Date(value).toISOString().replace("T", " ").slice(0, 16) + " UTC";
+}
+
 export default async function DashboardPage() {
   const supabase = await createClient();
   const { data, error } = await supabase.auth.getClaims();
@@ -46,7 +50,7 @@ export default async function DashboardPage() {
         {videoRows.map(video => {
           const job = jobsByVideo.get(video.id);
           return <article className="job" key={video.id}>
-            <div><h3>{video.title || "Untitled video"}</h3><p>{video.source_type === "youtube" ? "YouTube source" : "Uploaded video"} · {new Date(video.created_at).toLocaleString()}</p>{job?.error && <p className="error">{job.error}</p>}</div>
+            <div><h3>{video.title || "Untitled video"}</h3><p>{video.source_type === "youtube" ? "YouTube source" : "Uploaded video"} · {formatCreatedAt(video.created_at)}</p>{job?.error && <p className="error">{job.error}</p>}</div>
             <span className="job-status">{job ? job.status + (job.status === "processing" ? " · " + job.progress + "%" : "") : video.status}</span>
           </article>;
         })}
