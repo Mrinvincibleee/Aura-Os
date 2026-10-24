@@ -1,80 +1,72 @@
-# Aura OS full-stack foundation
+# Aura OS
 
-This project replaces the static mockup with a Next.js app backed by Supabase Auth, Postgres, and private Storage. It includes owner-scoped database policies, resumable source-video uploads, YouTube URL intake, a persistent job queue, and a separate worker adapter for an AI clipping service.
+Aura OS is a short-video editing beta built with Next.js and Supabase. The web app handles accounts, private source uploads, a persistent job queue, clip review, and downloads. A local worker uses Faster-Whisper and FFmpeg on the creator's computer to transcribe short videos, rank promising transcript windows, add captions/vertical framing/zoom, and save finished MP4s to private Supabase Storage.
 
-## Requirements
+## Free beta limits
 
-- Node.js 20.9 or newer
-- A Supabase project
-- A clipping processor that implements the adapter contract below
-- A web host for Next.js and an always-on worker host
+- One uploaded source video per account per UTC month.
+- MP4, MOV, or WebM; 45 MB maximum and 30 minutes maximum.
+- Up to five 720p vertical clips per source.
+- The local processing computer must be on and connected while jobs run.
+- The transcript uses an open-source speech model; moment ranking is a heuristic, not a promise that a clip will go viral.
+- Aura does not download videos from YouTube. Upload a video you own or are allowed to edit.
+- Paid plans and payment processing are not enabled.
 
-## Local setup
+The small file cap is intentional: Supabase Free currently limits individual uploads to 50 MB and includes 1 GB of Storage. Verify your account's dashboard limit before sharing this beta with others.
 
-1. Copy .env.example to .env.local.
-2. Add your Supabase project URL and publishable key.
-3. Open the Supabase SQL Editor and run supabase/migrations/202610220001_aura_core.sql once.
-4. In Supabase Auth, configure the local redirect URL http://localhost:3000/auth/callback.
-5. Install and start the web app:
+## Web app setup
+
+Requirements: Node.js 20.9 or newer and a Supabase project.
+
+1. Copy `.env.example` to `.env.local` and add the Supabase project URL and publishable key.
+2. In the Supabase SQL Editor, run these migrations in order:
+   - `supabase/migrations/202610220001_aura_core.sql`
+   - `supabase/migrations/202610240001_free_beta_limits.sql`
+3. In Supabase Auth, add `http://localhost:3000/auth/callback` to the redirect URL allow list.
+4. Run `npm ci`, then `npm run dev`.
+5. Open `http://localhost:3000`, create an account, and confirm the email if Supabase requires it.
+
+## Start the local video worker
+
+The worker uses the creator computer's CPU. It is not a 24/7 cloud service; a job remains queued while the worker is stopped.
+
+1. Install Python 3.11 and FFmpeg/FFprobe from their official sources. Ensure `ffmpeg` and `ffprobe` both work in a new terminal.
+2. From the project folder, create a virtual environment and install the worker packages:
 
 ~~~powershell
-npm install
-npm run dev
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r worker\requirements.txt
 ~~~
 
-6. Open http://localhost:3000, create an account, and open the creator workspace.
-7. After setting a clipping processor and the worker-only service role key, start the worker in another terminal:
+3. Copy `.env.worker.example` to `.env.worker.local`.
+4. In `.env.worker.local`, set the Supabase URL, publishable key, **service-role key**, and `PYTHON_EXECUTABLE=.venv\\Scripts\\python.exe`. Get the service-role key from Supabase's API keys settings. It belongs only in this ignored local worker file; never paste it into chat, the browser, `NEXT_PUBLIC_` settings, or GitHub.
+5. In a second terminal, run:
 
 ~~~powershell
 npm run worker
 ~~~
 
-Never put the Supabase service role key in a NEXT_PUBLIC_ variable or browser code. It belongs only in the worker environment.
+The first job downloads the Whisper `base` model to the local machine; later jobs reuse it. Set `WHISPER_MODEL=tiny` if the computer is slow, or `small` for better transcription if it has enough memory. Upload videos with spoken audio. Jobs show their errors in the dashboard if a dependency or source is unavailable.
 
-## Processing adapter contract
+The worker downloads only time-limited signed URLs for files in Aura's private `source-videos` bucket. It does not receive YouTube URLs, and its Python child process does not receive the Supabase service-role key.
 
-The worker claims jobs atomically from Postgres, creates a temporary signed source URL for uploads, and sends the processor:
+## Deploy the web app for access from other devices
 
-~~~json
-{
-  "jobId": "uuid",
-  "videoId": "uuid",
-  "sourceUrl": "https://temporary-source-url",
-  "outputBucket": "clip-exports",
-  "outputPathPrefix": "owner-uuid/job-uuid/",
-  "outputUploads": [
-    { "index": 1, "path": "owner-uuid/job-uuid/clip-001.mp4", "token": "short-lived-upload-token" }
-  ]
-}
-~~~
+The project includes `netlify.toml`; Netlify's Next.js adapter supports the App Router, route handlers, and Server Actions used here. The Netlify Free plan currently has a hard monthly credit limit; when exhausted, its sites pause until the next cycle instead of adding overage charges. Check the current plan in the dashboard and keep auto-recharge/payment settings off.
 
-The processor must return JSON within 45 minutes:
+1. Import the public `Mrinvincibleee/Aura-Os` GitHub repository in Netlify, using the repository root.
+2. Keep the plan on Free. Do not enter a payment method to bypass any billing prompt.
+3. In the Netlify site's environment settings, set only `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` for the web app.
+4. After Netlify gives the site a URL, add `https://YOUR-SITE.netlify.app/auth/callback` to Supabase Auth's redirect URL allow list.
+5. Deploy and verify signup, email confirmation, login, upload, and dashboard refresh on the deployed URL.
+6. Keep running `npm run worker` on the creator computer to process jobs.
 
-~~~json
-{
-  "clips": [
-    {
-      "output_index": 1,
-      "title": "The useful moment",
-      "start_seconds": 42.5,
-      "end_seconds": 77.2,
-      "virality_score": 91,
-      "transcript": "A short transcript for the clip"
-    }
-  ]
-}
-~~~
+The existing GitHub Pages URL serves `docs/index.html`, a static design preview. It cannot run the Next.js backend, authentication callbacks, database access, or worker. Use the Netlify deployment for the actual web app.
 
-For every result, upload an MP4 to the corresponding outputUploads[index].path in the private clip-exports bucket using its signed token. Return output indices 1–15. The worker validates clip metadata, stores records, and marks the job complete only after the processor responds.
+## Optional external processing adapter
 
-YouTube links are recorded and queued; the processor must have a supported, authorized way to read each source. Aura OS does not download or process a YouTube video by itself.
+The worker can also send jobs to a private processor implementing the request/response contract in `worker/clip-worker.mjs`. Set `CLIP_PROCESSOR_URL` and `CLIP_PROCESSOR_API_KEY` only in the worker environment to use it. An external processor must upload output MP4s to the supplied short-lived signed upload slots before responding.
 
-## Deployment
+## Before a broader customer launch
 
-- Web app: deploy this folder to a host whose plan permits your intended business use. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY as build and runtime environment variables. Keep .env.local on your computer; it is ignored by Git.
-- Supabase: run the migration, add your deployed site's /auth/callback URL to the Supabase Auth redirect allow list, and keep both video buckets private.
-- Worker: deploy worker/clip-worker.mjs as a long-running Node process. Set NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, CLIP_PROCESSOR_URL, and CLIP_PROCESSOR_API_KEY only in its private environment.
-- AI: choose and connect a clipping, transcription, and video-rendering provider that implements the request/response contract. Until that provider and worker are deployed, jobs remain queued. The worker is separate so long renders do not block web requests.
-
-Prices follow your blueprint. Monthly usage limits are initial assumptions and should be confirmed before billing is enabled.
-
+The current $0 setup is a small beta, not a high-availability production service. It depends on one local worker computer, Supabase Free quotas, and Netlify Free credits. Add a reliable worker host and a suitable video-processing budget, implement reviewed privacy/terms and account-deletion flows, and connect a legitimate business payment provider before selling plans. Never promise virality or upload videos without the owner's permission.
