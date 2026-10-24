@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-const MAX_BYTES = 2 * 1024 * 1024 * 1024;
+// Supabase Free projects cap individual objects at 50 MB. Leave a little headroom.
+const MAX_BYTES = 45 * 1024 * 1024;
 const ALLOWED_VIDEO_TYPES = new Set(["video/mp4", "video/quicktime", "video/webm", "video/x-matroska"]);
 
 export async function POST(request: Request) {
@@ -14,22 +15,28 @@ export async function POST(request: Request) {
   const contentType = body.contentType ?? "";
   const size = Number(body.size);
   if (!fileName || !ALLOWED_VIDEO_TYPES.has(contentType) || !Number.isFinite(size) || size <= 0 || size > MAX_BYTES) {
-    return NextResponse.json({ error: "Choose a video file under 2 GB." }, { status: 400 });
+    return NextResponse.json({ error: "Choose an MP4, MOV, or WebM video under 45 MB." }, { status: 400 });
   }
 
   const videoId = crypto.randomUUID();
   const storagePath = user.id + "/" + videoId + "/" + fileName;
-  const { data: video, error: dbError } = await supabase.from("videos").insert({
-    id: videoId, owner_id: user.id, title: fileName.replace(/\.[^.]+$/, ""),
-    source_type: "upload", storage_path: storagePath, file_size_bytes: size,
-    content_type: contentType, status: "uploading",
-  }).select("id").single();
-  if (dbError || !video) return NextResponse.json({ error: dbError?.message ?? "Could not create the video record." }, { status: 500 });
-
   const { data: signed, error: signedError } = await supabase.storage.from("source-videos").createSignedUploadUrl(storagePath);
-  if (signedError || !signed?.token) {
-    await supabase.from("videos").delete().eq("id", videoId);
-    return NextResponse.json({ error: signedError?.message ?? "Could not prepare the secure upload." }, { status: 500 });
+  if (signedError || !signed?.token) return NextResponse.json({ error: "Could not prepare the secure upload. Check the source-videos bucket and Supabase Free upload limit." }, { status: 500 });
+
+  const { data: reservedId, error: reserveError } = await supabase.rpc("reserve_video_upload", {
+    p_video_id: videoId,
+    p_title: fileName.replace(/\.[^.]+$/, ""),
+    p_storage_path: storagePath,
+    p_file_size: Math.trunc(size),
+    p_content_type: contentType,
+  });
+  if (reserveError) {
+    if (reserveError.message.includes("free_monthly_video_limit_reached")) {
+      return NextResponse.json({ error: "Free plan limit reached: you can upload one source video per month." }, { status: 429 });
+    }
+    const migrationMissing = reserveError.message.includes("reserve_video_upload") || reserveError.message.includes("profiles");
+    return NextResponse.json({ error: migrationMissing ? "Apply the Aura OS free-beta database migration in Supabase, then try again." : "Could not reserve this upload. Verify the file settings and retry." }, { status: migrationMissing ? 503 : 400 });
   }
+  if (reservedId !== videoId) return NextResponse.json({ error: "Could not reserve this upload." }, { status: 500 });
   return NextResponse.json({ videoId, path: storagePath, token: signed.token }, { status: 201 });
 }
