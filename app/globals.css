@@ -7,3 +7,4 @@
 @media(max-width:640px){.clip-grid{grid-template-columns:1fr}}
 .setup-note{margin:18px 0;padding:15px;border:1px solid #ffffff16;border-radius:8px;background:#100f16;color:#bdb8c8;font-size:10px;line-height:1.65}.setup-note strong{color:#f0edf6}.setup-note ol{display:grid;gap:6px;margin:9px 0;padding-left:18px}.setup-note code{color:#d7caff;font-size:9px}.setup-note p{margin:11px 0 0}
 
+.job-tools{display:flex;align-items:center;gap:8px;justify-content:flex-end}.job-tools .btn{min-height:30px;padding:0 9px;font-size:8px}.job-tools .danger{border:1px solid #ffb6c133;background:#3a1e29;color:#ffb6c1}
